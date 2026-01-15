@@ -7,6 +7,9 @@ import {
 import { z } from 'zod';
 import { PostCache } from './post-cache.js';
 import { truncate } from './utils.js';
+import { generateCitation } from './citation.js';
+import { exportToMarkdown, exportToJSON } from './export.js';
+import { CitationStyle } from './types.js';
 
 // Configuration
 const FEED_URL = process.env.SUBSTACK_FEED_URL || 'https://fejl40.substack.com/feed';
@@ -122,6 +125,57 @@ const tools = [
         },
       },
       required: ['start_date', 'end_date'],
+    },
+  },
+  {
+    name: 'generate_citation',
+    description: 'Generate a formatted citation for a blog post',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'URL of the blog post to cite',
+        },
+        style: {
+          type: 'string',
+          description: 'Citation style: APA, MLA, Chicago, or markdown (default: markdown)',
+          enum: ['APA', 'MLA', 'Chicago', 'markdown'],
+          default: 'markdown',
+        },
+      },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'export_to_markdown',
+    description: 'Export blog posts to a markdown file',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        output_path: {
+          type: 'string',
+          description: 'Output file path (e.g., ~/Desktop/posts.md)',
+        },
+        query: {
+          type: 'string',
+          description: 'Optional search query to filter posts',
+        },
+        start_date: {
+          type: 'string',
+          description: 'Optional start date filter (ISO 8601 format)',
+        },
+        end_date: {
+          type: 'string',
+          description: 'Optional end date filter (ISO 8601 format)',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum number of posts to export (default: 100)',
+          default: 100,
+        },
+      },
+      required: ['output_path'],
     },
   },
 ];
@@ -298,6 +352,105 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             },
           ],
         };
+      }
+
+      case 'generate_citation': {
+        const url = z.string().url().parse(args.url);
+        const style = z.enum(['APA', 'MLA', 'Chicago', 'markdown']).optional().default('markdown').parse(args.style) as CitationStyle;
+
+        const post = await cache.getPostByUrl(url);
+
+        if (!post) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({ error: 'Post not found' }),
+              },
+            ],
+          };
+        }
+
+        const citation = generateCitation(post, style);
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  citation: citation.citation,
+                  style: citation.style,
+                  post: {
+                    title: post.title,
+                    link: post.link,
+                    author: post.author,
+                    pubDate: post.pubDate.toISOString(),
+                  },
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
+
+      case 'export_to_markdown': {
+        const outputPath = z.string().parse(args.output_path);
+        const query = z.string().optional().parse(args.query);
+        const startDateStr = z.string().optional().parse(args.start_date);
+        const endDateStr = z.string().optional().parse(args.end_date);
+        const limit = z.number().optional().default(100).parse(args.limit);
+
+        // Get posts based on filters
+        let posts = await cache.getPosts();
+
+        // Apply search query filter
+        if (query) {
+          posts = await cache.searchPosts(query, limit);
+        }
+
+        // Apply date range filter
+        if (startDateStr && endDateStr) {
+          const startDate = new Date(startDateStr);
+          const endDate = new Date(endDateStr);
+          posts = posts.filter(p => p.pubDate >= startDate && p.pubDate <= endDate);
+        }
+
+        // Apply limit
+        posts = posts.slice(0, limit);
+
+        // Export to markdown
+        try {
+          exportToMarkdown(posts, outputPath);
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  success: true,
+                  message: `Exported ${posts.length} posts to ${outputPath}`,
+                  posts_count: posts.length,
+                  output_path: outputPath,
+                }),
+              },
+            ],
+          };
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  error: error instanceof Error ? error.message : String(error),
+                }),
+              },
+            ],
+            isError: true,
+          };
+        }
       }
 
       default:

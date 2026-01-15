@@ -9,14 +9,17 @@ This MCP server fetches blog posts from a Substack RSS feed and provides tools f
 ## Features
 
 - **Full-text Search**: Search across post titles, content, and descriptions using FlexSearch
+- **Persistent Disk Cache**: Saves posts to disk for instant startup (~/.cache/substack-mcp/)
 - **Smart Caching**: In-memory cache with configurable TTL (default: 30 minutes)
 - **Auto-refresh**: Automatically updates when cache expires
-- **5 MCP Tools**:
+- **7 MCP Tools**:
   - `search_posts` - Search by keywords
   - `list_recent_posts` - Get most recent posts
   - `get_post_by_title` - Find by title
   - `get_post_by_url` - Get by URL
   - `get_posts_by_date_range` - Filter by date range
+  - `generate_citation` - Generate formatted citations (APA, MLA, Chicago, markdown)
+  - `export_to_markdown` - Export posts to markdown files
 
 ## Installation
 
@@ -134,6 +137,42 @@ Get posts published within a date range.
 - `end_date` (string, required) - End date (ISO 8601 format)
 - `limit` (number, optional) - Maximum results (default: 100)
 
+### generate_citation
+Generate a formatted citation for a blog post.
+
+**Parameters:**
+- `url` (string, required) - URL of the blog post to cite
+- `style` (string, optional) - Citation style: 'APA', 'MLA', 'Chicago', or 'markdown' (default: 'markdown')
+
+**Example output:**
+```json
+{
+  "citation": "[Post Title](https://fejl40.substack.com/...) by Anders Schaffner, December 15, 2024",
+  "style": "markdown",
+  "post": {
+    "title": "Post Title",
+    "link": "https://fejl40.substack.com/...",
+    "author": "Anders Schaffner",
+    "pubDate": "2024-12-15T..."
+  }
+}
+```
+
+### export_to_markdown
+Export blog posts to a markdown file.
+
+**Parameters:**
+- `output_path` (string, required) - Output file path (e.g., ~/Desktop/posts.md)
+- `query` (string, optional) - Search query to filter posts
+- `start_date` (string, optional) - Start date filter (ISO 8601 format)
+- `end_date` (string, optional) - End date filter (ISO 8601 format)
+- `limit` (number, optional) - Maximum posts to export (default: 100)
+
+**Example usage:**
+- Export all posts: `export_to_markdown({ output_path: "~/Desktop/all-posts.md" })`
+- Export AI-related posts: `export_to_markdown({ output_path: "~/Desktop/ai-posts.md", query: "AI" })`
+- Export 2024 posts: `export_to_markdown({ output_path: "~/Desktop/2024.md", start_date: "2024-01-01", end_date: "2024-12-31" })`
+
 ## Development
 
 ### Scripts
@@ -148,8 +187,10 @@ Get posts published within a date range.
 .
 ├── src/
 │   ├── index.ts          # Main MCP server
-│   ├── post-cache.ts     # Caching and search logic
+│   ├── post-cache.ts     # Caching and search logic with disk persistence
 │   ├── rss-fetcher.ts    # RSS feed parser
+│   ├── citation.ts       # Citation formatting (APA, MLA, Chicago, markdown)
+│   ├── export.ts         # Export to markdown/JSON
 │   ├── types.ts          # TypeScript interfaces
 │   └── utils.ts          # Helper functions
 ├── build.js              # esbuild configuration
@@ -161,11 +202,15 @@ Get posts published within a date range.
 ## How It Works
 
 1. **Server Startup**: When Claude Desktop launches, it starts the MCP server
-2. **RSS Fetch**: The server fetches posts from the Substack RSS feed
-3. **Indexing**: Posts are indexed with FlexSearch for fast searching
-4. **Caching**: Posts are cached in memory with a 30-minute TTL
-5. **Auto-refresh**: Cache automatically refreshes when it expires
-6. **Tool Calls**: Claude calls the MCP tools when you ask about your blog
+2. **Disk Cache Load**: Server attempts to load posts from disk cache (~/.cache/substack-mcp/posts.json)
+3. **RSS Fetch**: If disk cache is missing or stale, fetches posts from the Substack RSS feed
+4. **Indexing**: Posts are indexed with FlexSearch for fast searching
+5. **Disk Persistence**: Posts are saved to disk cache for instant startup next time
+6. **Memory Caching**: Posts are cached in memory with a 30-minute TTL
+7. **Auto-refresh**: Cache automatically refreshes when it expires
+8. **Tool Calls**: Claude calls the MCP tools when you ask about your blog
+
+**Performance**: With disk cache, startup is nearly instant (< 1 second). Without disk cache, first startup takes 3-5 seconds to fetch RSS.
 
 ## Troubleshooting
 

@@ -1,5 +1,7 @@
 import { Document } from 'flexsearch';
-import { SubstackPost } from './types.js';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
+import { join } from 'path';
+import { SubstackPost, DiskCache } from './types.js';
 import { fetchSubstackFeed } from './rss-fetcher.js';
 
 /**
@@ -11,10 +13,27 @@ export class PostCache {
   private lastFetched: Date | null = null;
   private readonly cacheTTL: number;
   private readonly feedUrl: string;
+  private readonly cacheDir: string;
+  private readonly cacheFile: string;
+  private readonly CACHE_VERSION = '1.0.0';
 
   constructor(feedUrl: string, cacheTTLMs: number = 1800000) {
     this.feedUrl = feedUrl;
     this.cacheTTL = cacheTTLMs;
+
+    // Set up cache directory
+    const homeDir = process.env.HOME || process.env.USERPROFILE || '/tmp';
+    this.cacheDir = join(homeDir, '.cache', 'substack-mcp');
+    this.cacheFile = join(this.cacheDir, 'posts.json');
+
+    // Ensure cache directory exists
+    try {
+      if (!existsSync(this.cacheDir)) {
+        mkdirSync(this.cacheDir, { recursive: true });
+      }
+    } catch (error) {
+      console.error('Failed to create cache directory:', error);
+    }
 
     // Initialize FlexSearch index
     this.searchIndex = new Document({
@@ -37,7 +56,19 @@ export class PostCache {
    */
   async initialize(): Promise<void> {
     console.error('Initializing post cache...');
-    await this.refreshCache();
+
+    // Try loading from disk first
+    const loadedFromDisk = await this.loadFromDisk();
+
+    if (loadedFromDisk) {
+      console.error('Loaded posts from disk cache');
+      // Still refresh if cache is stale
+      await this.ensureFreshCache();
+    } else {
+      // No disk cache, fetch from RSS
+      await this.refreshCache();
+    }
+
     console.error('Post cache initialized');
   }
 
@@ -173,6 +204,9 @@ export class PostCache {
       // Rebuild search index
       await this.rebuildSearchIndex();
 
+      // Save to disk
+      await this.saveToDisk();
+
       console.error(`Cache refreshed: ${posts.length} posts loaded`);
     } catch (error) {
       console.error('Failed to refresh cache:', error);
@@ -205,6 +239,73 @@ export class PostCache {
     // Add all posts to index
     for (const post of this.posts) {
       await this.searchIndex.addAsync(post.id, post);
+    }
+  }
+
+  /**
+   * Load posts from disk cache
+   * @returns true if loaded successfully, false otherwise
+   */
+  private async loadFromDisk(): Promise<boolean> {
+    try {
+      if (!existsSync(this.cacheFile)) {
+        return false;
+      }
+
+      const fileContent = readFileSync(this.cacheFile, 'utf-8');
+      const diskCache: DiskCache = JSON.parse(fileContent);
+
+      // Validate cache version
+      if (diskCache.version !== this.CACHE_VERSION) {
+        console.error('Cache version mismatch, ignoring disk cache');
+        return false;
+      }
+
+      // Validate feed URL matches
+      if (diskCache.feedUrl !== this.feedUrl) {
+        console.error('Feed URL mismatch, ignoring disk cache');
+        return false;
+      }
+
+      // Restore posts with Date objects
+      this.posts = diskCache.posts.map(post => ({
+        ...post,
+        pubDate: new Date(post.pubDate)
+      }));
+
+      this.lastFetched = new Date(diskCache.lastFetched);
+
+      // Rebuild search index with loaded posts
+      await this.rebuildSearchIndex();
+
+      console.error(`Loaded ${this.posts.length} posts from disk cache`);
+      return true;
+    } catch (error) {
+      console.error('Failed to load disk cache:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Save posts to disk cache
+   */
+  private async saveToDisk(): Promise<void> {
+    try {
+      const diskCache: DiskCache = {
+        version: this.CACHE_VERSION,
+        feedUrl: this.feedUrl,
+        lastFetched: this.lastFetched?.toISOString() || new Date().toISOString(),
+        posts: this.posts.map(post => ({
+          ...post,
+          pubDate: post.pubDate.toISOString() as any // Will be string in JSON
+        }))
+      };
+
+      writeFileSync(this.cacheFile, JSON.stringify(diskCache, null, 2), 'utf-8');
+      console.error(`Saved ${this.posts.length} posts to disk cache`);
+    } catch (error) {
+      console.error('Failed to save disk cache:', error);
+      // Don't throw - disk cache is optional
     }
   }
 }
